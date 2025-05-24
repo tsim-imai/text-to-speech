@@ -1,8 +1,7 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
 import player from 'play-sound';
-import { logger, platform, platformConfig, getShellCommand } from './utils.js';
+import { logger, platform, platformConfig } from './utils.js';
 
 const execAsync = promisify(exec);
 
@@ -16,7 +15,7 @@ export class AudioPlayer {
   private audioPlayer: ReturnType<typeof player>;
   private blackholeDevice: string;
   private enableDualOutput: boolean;
-  private speakerDevice?: string;
+  private speakerDevice: string | undefined;
 
   constructor(options: AudioPlayerOptions = {}) {
     // プラットフォーム固有のデフォルト値
