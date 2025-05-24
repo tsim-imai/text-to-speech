@@ -81,13 +81,59 @@ npm run build
 
 ## 使用方法
 
-### 基本的な実行（macOS TTS）
+### 🔧 設定方法
+
+このアプリケーションは **環境変数** または **CLI引数** で設定できます。環境変数を使用することで、毎回長いコマンドを入力する必要がありません。
+
+#### 環境変数による設定（推奨）
 
 ```bash
-# 環境変数を使用
+# .envファイルを編集
+cp env.example .env
+```
+
+`.env`ファイルで設定を行い、シンプルに実行:
+
+```bash
+# .envファイルの設定だけで実行
 npm run dev
 
-# または CLI 引数で指定
+# または直接実行
+npx tsx src/index.ts
+```
+
+#### CLI引数による設定
+
+```bash
+# CLI引数ですべてを指定
+npx tsx src/index.ts \
+  --token "YOUR_BOT_TOKEN" \
+  --channel "TEXT_CHANNEL_ID" \
+  --voice "Kyoko" \
+  --rate 230
+```
+
+> **Note**: CLI引数は環境変数より優先されます。
+
+### 基本的な実行（macOS TTS）
+
+#### .envを使用（推奨）
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+TTS_ENGINE=macos
+TTS_VOICE=Kyoko
+TTS_RATE=230
+BLACKHOLE_DEVICE=BlackHole 2ch
+```
+
+```bash
+npm run dev
+```
+
+#### CLI引数を使用
+```bash
 npx tsx src/index.ts \
   --token "YOUR_BOT_TOKEN" \
   --channel "TEXT_CHANNEL_ID" \
@@ -98,6 +144,24 @@ npx tsx src/index.ts \
 
 ### 🎭 VOICEVOX でずんだもんを使用
 
+#### .envを使用（推奨）
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+TTS_ENGINE=voicevox
+VOICEVOX_SPEAKER=3
+```
+
+```bash
+# 1. VOICEVOXを起動
+open -a VOICEVOX
+
+# 2. アプリケーション起動
+npm run dev
+```
+
+#### CLI引数を使用
 ```bash
 # 1. VOICEVOXを起動
 open -a VOICEVOX
@@ -148,6 +212,22 @@ hau                : 波音リツ (ノーマル) [ID: 10]
 
 ### 特定ユーザーのみ読み上げ
 
+#### .envを使用（推奨）
+```env
+# .env - 単一ユーザー
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+ALLOWED_USERS=290338075920564224
+
+# .env - 複数ユーザー（カンマ区切り）
+ALLOWED_USERS=123456789012345678,987654321098765432,555666777888999000
+```
+
+```bash
+npm run dev
+```
+
+#### CLI引数を使用
 ```bash
 # 特定のユーザーID（単一）
 npx tsx src/index.ts \
@@ -165,15 +245,34 @@ npx tsx src/index.ts \
 ### 音声を自分でも聞く設定
 
 #### 方法1: マルチ出力デバイス使用（推奨）
+
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+BLACKHOLE_DEVICE=TTS Multi-Output
+```
+
 ```bash
 # マルチ出力デバイスを作成後
-npx tsx src/index.ts \
-  --token "YOUR_BOT_TOKEN" \
-  --channel "TEXT_CHANNEL_ID" \
-  --blackhole "TTS Multi-Output"
+npm run dev
 ```
 
 #### 方法2: デュアル出力機能使用
+
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+ENABLE_DUAL_OUTPUT=true
+SPEAKER_DEVICE=外部ヘッドホン
+```
+
+```bash
+npm run dev
+```
+
+#### CLI引数を使用
 ```bash
 # アプリ側でBlackHoleとスピーカーの両方に再生
 npx tsx src/index.ts \
@@ -190,36 +289,36 @@ SwitchAudioSource -a -t output
 
 #### 基本オプション
 
-| オプション | 短縮形 | デフォルト | 説明 |
-|-----------|--------|-----------|------|
-| `--token` | `-t` | 環境変数 `BOT_TOKEN` | Discord Bot トークン |
-| `--channel` | `-c` | 環境変数 `CHANNEL_ID` | 読み上げ対象のテキストチャンネル ID |
-| `--voice` | `-v` | `Kyoko` | macOS TTS 音声 |
-| `--rate` | `-r` | `230` | 話速（文字/分） |
-| `--volume` | | `50` | 音量（0-100） |
-| `--blackhole` | `-b` | `BlackHole 2ch` | BlackHole デバイス名 |
-| `--afplay` | | `false` | afplay コマンドを使用 |
-| `--allowed-users` | `-u` | 全ユーザー | 読み上げを許可するユーザーID（カンマ区切り） |
-| `--enable-dual-output` | | `false` | デュアル出力を有効にする |
-| `--speaker-device` | | なし | 追加で再生するスピーカーデバイス名 |
+| オプション | 短縮形 | 環境変数 | デフォルト | 説明 |
+|-----------|--------|----------|-----------|------|
+| `--token` | `-t` | `BOT_TOKEN` | - | Discord Bot トークン |
+| `--channel` | `-c` | `CHANNEL_ID` | - | 読み上げ対象のテキストチャンネル ID |
+| `--voice` | `-v` | `TTS_VOICE` | `Kyoko` | macOS TTS 音声 |
+| `--rate` | `-r` | `TTS_RATE` | `230` | 話速（文字/分） |
+| `--volume` | | `TTS_VOLUME` | `50` | 音量（0-100） |
+| `--blackhole` | `-b` | `BLACKHOLE_DEVICE` | `BlackHole 2ch` | BlackHole デバイス名 |
+| `--afplay` | | `USE_AFPLAY` | `false` | afplay コマンドを使用 |
+| `--allowed-users` | `-u` | `ALLOWED_USERS` | 全ユーザー | 読み上げを許可するユーザーID（カンマ区切り） |
+| `--enable-dual-output` | | `ENABLE_DUAL_OUTPUT` | `false` | デュアル出力を有効にする |
+| `--speaker-device` | | `SPEAKER_DEVICE` | なし | 追加で再生するスピーカーデバイス名 |
 
 #### TTSエンジン選択
 
-| オプション | デフォルト | 説明 |
-|-----------|-----------|------|
-| `--engine` | `macos` | TTSエンジン (`macos` / `voicevox`) |
+| オプション | 環境変数 | デフォルト | 説明 |
+|-----------|----------|-----------|------|
+| `--engine` | `TTS_ENGINE` | `macos` | TTSエンジン (`macos` / `voicevox`) |
 
 #### VOICEVOXオプション
 
-| オプション | デフォルト | 説明 |
-|-----------|-----------|------|
-| `--voicevox-host` | `localhost` | VOICEVOXサーバーホスト |
-| `--voicevox-port` | `50021` | VOICEVOXサーバーポート |
-| `--voicevox-speaker` | `3` | スピーカーID（ずんだもん） |
-| `--voicevox-speed` | `1.0` | 話速倍率 |
-| `--voicevox-pitch` | `0.0` | ピッチ調整 |
-| `--voicevox-intonation` | `1.0` | イントネーション倍率 |
-| `--voicevox-volume` | `1.0` | 音量倍率 |
+| オプション | 環境変数 | デフォルト | 説明 |
+|-----------|----------|-----------|------|
+| `--voicevox-host` | `VOICEVOX_HOST` | `localhost` | VOICEVOXサーバーホスト |
+| `--voicevox-port` | `VOICEVOX_PORT` | `50021` | VOICEVOXサーバーポート |
+| `--voicevox-speaker` | `VOICEVOX_SPEAKER` | `3` | スピーカーID（ずんだもん） |
+| `--voicevox-speed` | `VOICEVOX_SPEED` | `1.0` | 話速倍率 |
+| `--voicevox-pitch` | `VOICEVOX_PITCH` | `0.0` | ピッチ調整 |
+| `--voicevox-intonation` | `VOICEVOX_INTONATION` | `1.0` | イントネーション倍率 |
+| `--voicevox-volume` | `VOICEVOX_VOLUME` | `1.0` | 音量倍率 |
 
 ### ユーザーIDの取得方法
 
@@ -347,6 +446,21 @@ graph TD
 
 ### 配信者向け設定
 
+#### .envを使用（推奨）
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_chat_channel_id_here
+ALLOWED_USERS=your_user_id_here
+TTS_VOICE=Kyoko
+TTS_RATE=200
+```
+
+```bash
+npm run dev
+```
+
+#### CLI引数を使用
 ```bash
 # 配信者自身のメッセージのみ読み上げ
 npx tsx src/index.ts \
@@ -359,6 +473,20 @@ npx tsx src/index.ts \
 
 ### モデレーター限定
 
+#### .envを使用（推奨）
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_mod_channel_id_here
+ALLOWED_USERS=mod1_id,mod2_id,mod3_id
+TTS_VOICE=Otoya
+```
+
+```bash
+npm run dev
+```
+
+#### CLI引数を使用
 ```bash
 # 複数のモデレーターのみ
 npx tsx src/index.ts \
@@ -366,6 +494,33 @@ npx tsx src/index.ts \
   --channel "MOD_CHANNEL_ID" \
   --allowed-users "MOD1_ID,MOD2_ID,MOD3_ID" \
   --voice "Otoya"
+```
+
+### 高品質VOICEVOX設定例
+
+#### ずんだもん（あまあま）+ 高音質設定
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+TTS_ENGINE=voicevox
+VOICEVOX_SPEAKER=1
+VOICEVOX_SPEED=0.9
+VOICEVOX_PITCH=0.1
+VOICEVOX_INTONATION=1.2
+VOICEVOX_VOLUME=0.8
+```
+
+#### 四国めたん + カスタム設定
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+TTS_ENGINE=voicevox
+VOICEVOX_SPEAKER=2
+VOICEVOX_SPEED=1.1
+VOICEVOX_PITCH=-0.05
+VOICEVOX_INTONATION=0.9
 ```
 
 ## トラブルシューティング

@@ -210,24 +210,28 @@ program
   .name('discord-tts-bridge')
   .description('Discord テキストチャンネルのメッセージを macOS TTS または VOICEVOX で読み上げるアプリ')
   .version('1.0.0')
-  .option('-t, --token <token>', 'Discord Bot トークン', process.env['BOT_TOKEN'])
-  .option('-c, --channel <id>', 'テキストチャンネル ID', process.env['CHANNEL_ID'])
-  .option('-v, --voice <voice>', 'TTS 音声', 'Kyoko')
-  .option('-r, --rate <rate>', '話速 (文字/分)', '230')
-  .option('--volume <volume>', '音量 (0-100)', '50')
-  .option('-b, --blackhole <device>', 'BlackHole デバイス名', 'BlackHole 2ch')
-  .option('--afplay', 'afplay コマンドを使用', false)
-  .option('-u, --allowed-users <users>', '読み上げを許可するユーザーID（カンマ区切り）', '')
-  .option('--enable-dual-output', 'デュアル出力を有効にする', false)
-  .option('--speaker-device <device>', '追加で再生するスピーカーデバイス名')
-  .option('--engine <engine>', 'TTSエンジン (macos/voicevox)', 'macos')
-  .option('--voicevox-host <host>', 'VOICEVOXホスト', 'localhost')
-  .option('--voicevox-port <port>', 'VOICEVOXポート', '50021')
-  .option('--voicevox-speaker <id>', 'VOICEVOXスピーカーID', '3')
-  .option('--voicevox-speed <speed>', 'VOICEVOX話速倍率', '1.0')
-  .option('--voicevox-pitch <pitch>', 'VOICEVOXピッチ調整', '0.0')
-  .option('--voicevox-intonation <intonation>', 'VOICEVOXイントネーション倍率', '1.0')
-  .option('--voicevox-volume <volume>', 'VOICEVOX音量倍率', '1.0');
+  .option('-t, --token <token>', 'Discord Bot トークン', process.env.BOT_TOKEN)
+  .option('-c, --channel <id>', 'テキストチャンネル ID', process.env.CHANNEL_ID)
+  .option('-v, --voice <voice>', 'TTS 音声', process.env.TTS_VOICE || 'Kyoko')
+  .option('-r, --rate <rate>', '話速 (文字/分)', process.env.TTS_RATE || '230')
+  .option('--volume <volume>', '音量 (0-100)', process.env.TTS_VOLUME || '50')
+  .option('-b, --blackhole <device>', 'BlackHole デバイス名', process.env.BLACKHOLE_DEVICE || 'BlackHole 2ch')
+  .option('--afplay', 'afplay コマンドを使用', process.env.USE_AFPLAY === 'true')
+  .option('-u, --allowed-users <users>', '読み上げを許可するユーザーID（カンマ区切り）', process.env.ALLOWED_USERS || '')
+  .option('--enable-dual-output', 'デュアル出力を有効にする', process.env.ENABLE_DUAL_OUTPUT === 'true')
+  .option('--speaker-device <device>', '追加で再生するスピーカーデバイス名', process.env.SPEAKER_DEVICE)
+  .option('--engine <engine>', 'TTSエンジン (macos/voicevox)', process.env.TTS_ENGINE || 'macos')
+  .option('--voicevox-host <host>', 'VOICEVOXホスト', process.env.VOICEVOX_HOST || 'localhost')
+  .option('--voicevox-port <port>', 'VOICEVOXポート', process.env.VOICEVOX_PORT || '50021')
+  .option('--voicevox-speaker <id>', 'VOICEVOXスピーカーID', process.env.VOICEVOX_SPEAKER || '3')
+  .option('--voicevox-speed <speed>', 'VOICEVOX話速倍率', process.env.VOICEVOX_SPEED || '1.0')
+  .option('--voicevox-pitch <pitch>', 'VOICEVOXピッチ調整', process.env.VOICEVOX_PITCH || '0.0')
+  .option('--voicevox-intonation <intonation>', 'VOICEVOXイントネーション倍率', process.env.VOICEVOX_INTONATION || '1.0')
+  .option('--voicevox-volume <volume>', 'VOICEVOX音量倍率', process.env.VOICEVOX_VOLUME || '1.0')
+  .action(() => {
+    // メインアプリケーションの実行処理
+    startMainApplication();
+  });
 
 // VOICEVOXプリセット表示コマンド
 program
@@ -235,9 +239,9 @@ program
   .description('VOICEVOXキャラクタープリセット一覧を表示')
   .action(() => {
     console.log('\n=== VOICEVOXキャラクタープリセット ===');
-    Object.entries(VOICEVOX_PRESETS).forEach(([key, value]) => {
+    for (const [key, value] of Object.entries(VOICEVOX_PRESETS)) {
       console.log(`${key.padEnd(20)} : ${value.name} (${value.style}) [ID: ${value.id}]`);
-    });
+    }
     console.log('\n使用例:');
     console.log(`npx tsx src/index.ts --engine voicevox --voicevox-speaker ${VOICEVOX_PRESETS.zundamon.id} # ずんだもん`);
     process.exit(0);
@@ -245,80 +249,84 @@ program
 
 program.parse();
 
-const options = program.opts<{
-  token?: string;
-  channel?: string;
-  voice: string;
-  rate: string;
-  volume: string;
-  blackhole: string;
-  afplay: boolean;
-  allowedUsers: string;
-  enableDualOutput: boolean;
-  speakerDevice: string;
-  engine: string;
-  voicevoxHost: string;
-  voicevoxPort: string;
-  voicevoxSpeaker: string;
-  voicevoxSpeed: string;
-  voicevoxPitch: string;
-  voicevoxIntonation: string;
-  voicevoxVolume: string;
-}>();
+// サブコマンドが実行された場合はここで終了するため、以下はメインアプリケーションの処理
 
-// 必須オプションチェック
-if (!options.token) {
-  logger.error('Discord Bot トークンが指定されていません。--token オプションまたは BOT_TOKEN 環境変数を設定してください。');
-  process.exit(1);
-}
+function startMainApplication(): void {
+  const options = program.opts<{
+    token?: string;
+    channel?: string;
+    voice: string;
+    rate: string;
+    volume: string;
+    blackhole: string;
+    afplay: boolean;
+    allowedUsers: string;
+    enableDualOutput: boolean;
+    speakerDevice: string;
+    engine: string;
+    voicevoxHost: string;
+    voicevoxPort: string;
+    voicevoxSpeaker: string;
+    voicevoxSpeed: string;
+    voicevoxPitch: string;
+    voicevoxIntonation: string;
+    voicevoxVolume: string;
+  }>();
 
-if (!options.channel) {
-  logger.error('チャンネル ID が指定されていません。--channel オプションまたは CHANNEL_ID 環境変数を設定してください。');
-  process.exit(1);
-}
-
-// エンジン選択チェック
-if (options.engine !== 'macos' && options.engine !== 'voicevox') {
-  logger.error('--engine は "macos" または "voicevox" を指定してください。');
-  process.exit(1);
-}
-
-// 許可ユーザーIDの処理
-let allowedUserIds: string[] | undefined;
-if (options.allowedUsers?.trim()) {
-  allowedUserIds = options.allowedUsers
-    .split(',')
-    .map(id => id.trim())
-    .filter(id => id.length > 0);
-  
-  if (allowedUserIds.length === 0) {
-    allowedUserIds = undefined;
+  // 必須オプションチェック
+  if (!options.token) {
+    logger.error('Discord Bot トークンが指定されていません。--token オプションまたは BOT_TOKEN 環境変数を設定してください。');
+    process.exit(1);
   }
-}
 
-// アプリケーション開始
-const app = new DiscordTTSBridge({
-  token: options.token,
-  channel: options.channel,
-  voice: options.voice,
-  rate: Number.parseInt(options.rate, 10),
-  volume: Number.parseInt(options.volume, 10),
-  blackhole: options.blackhole,
-  useAfplay: options.afplay,
-  enableDualOutput: options.enableDualOutput,
-  speakerDevice: options.speakerDevice,
-  engine: options.engine as 'macos' | 'voicevox',
-  voicevoxHost: options.voicevoxHost,
-  voicevoxPort: Number.parseInt(options.voicevoxPort, 10),
-  voicevoxSpeaker: Number.parseInt(options.voicevoxSpeaker, 10),
-  voicevoxSpeed: Number.parseFloat(options.voicevoxSpeed),
-  voicevoxPitch: Number.parseFloat(options.voicevoxPitch),
-  voicevoxIntonation: Number.parseFloat(options.voicevoxIntonation),
-  voicevoxVolume: Number.parseFloat(options.voicevoxVolume),
-  ...(allowedUserIds && { allowedUserIds }),
-});
+  if (!options.channel) {
+    logger.error('チャンネル ID が指定されていません。--channel オプションまたは CHANNEL_ID 環境変数を設定してください。');
+    process.exit(1);
+  }
 
-app.start().catch((error) => {
-  logger.error(`アプリケーション起動エラー: ${error}`);
-  process.exit(1);
-}); 
+  // エンジン選択チェック
+  if (options.engine !== 'macos' && options.engine !== 'voicevox') {
+    logger.error('--engine は "macos" または "voicevox" を指定してください。');
+    process.exit(1);
+  }
+
+  // 許可ユーザーIDの処理
+  let allowedUserIds: string[] | undefined;
+  if (options.allowedUsers?.trim()) {
+    allowedUserIds = options.allowedUsers
+      .split(',')
+      .map(id => id.trim())
+      .filter(id => id.length > 0);
+    
+    if (allowedUserIds.length === 0) {
+      allowedUserIds = undefined;
+    }
+  }
+
+  // アプリケーション開始
+  const app = new DiscordTTSBridge({
+    token: options.token,
+    channel: options.channel,
+    voice: options.voice,
+    rate: Number.parseInt(options.rate, 10),
+    volume: Number.parseInt(options.volume, 10),
+    blackhole: options.blackhole,
+    useAfplay: options.afplay,
+    enableDualOutput: options.enableDualOutput,
+    speakerDevice: options.speakerDevice,
+    engine: options.engine as 'macos' | 'voicevox',
+    voicevoxHost: options.voicevoxHost,
+    voicevoxPort: Number.parseInt(options.voicevoxPort, 10),
+    voicevoxSpeaker: Number.parseInt(options.voicevoxSpeaker, 10),
+    voicevoxSpeed: Number.parseFloat(options.voicevoxSpeed),
+    voicevoxPitch: Number.parseFloat(options.voicevoxPitch),
+    voicevoxIntonation: Number.parseFloat(options.voicevoxIntonation),
+    voicevoxVolume: Number.parseFloat(options.voicevoxVolume),
+    ...(allowedUserIds && { allowedUserIds }),
+  });
+
+  app.start().catch((error) => {
+    logger.error(`アプリケーション起動エラー: ${error}`);
+    process.exit(1);
+  });
+} 

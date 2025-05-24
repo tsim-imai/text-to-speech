@@ -50,9 +50,8 @@ export class TTSEngine {
   async synthesize(text: string, options: TTSOptions): Promise<string> {
     if (this.engine === 'voicevox' && this.voicevoxEngine) {
       return this.synthesizeWithVoicevox(text);
-    } else {
-      return this.synthesizeWithMacOS(text, options);
     }
+    return this.synthesizeWithMacOS(text, options);
   }
 
   private async synthesizeWithVoicevox(text: string): Promise<string> {
