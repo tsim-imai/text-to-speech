@@ -1,6 +1,4 @@
-import { join } from 'node:path';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { logger, sanitizeFilename } from './utils.js';
+import { logger } from './utils.js';
 
 export interface VoicevoxOptions {
   host: string;
@@ -40,39 +38,47 @@ export interface AudioQuery {
 
 export class VoicevoxEngine {
   private options: VoicevoxOptions;
-  private outputDir: string;
   private baseUrl: string;
 
   constructor(options: VoicevoxOptions) {
     this.options = options;
-    this.outputDir = join(process.cwd(), 'temp_audio');
     this.baseUrl = `http://${options.host}:${options.port}`;
-    
-    if (!existsSync(this.outputDir)) {
-      mkdirSync(this.outputDir, { recursive: true });
-    }
   }
 
-  async synthesize(text: string): Promise<string> {
-    const filename = `voicevox_${Date.now()}_${sanitizeFilename(text)}.wav`;
-    const outputPath = join(this.outputDir, filename);
-
+  async synthesizeToBuffer(text: string): Promise<Buffer> {
     try {
-      logger.info(`VOICEVOX音声合成開始: ${text.substring(0, 50)}...`);
-      
-      // 1. 音声クエリを作成
+      // 音声クエリ作成
       const audioQuery = await this.createAudioQuery(text);
       
-      // 2. 音声合成
-      const audioBuffer = await this.synthesizeAudio(audioQuery);
-      
-      // 3. ファイルに保存
-      writeFileSync(outputPath, audioBuffer);
-      
-      logger.info(`VOICEVOX音声合成完了: ${outputPath}`);
-      return outputPath;
+      // 音声合成（ArrayBufferで取得）
+      const synthesisResponse = await fetch(
+        `${this.baseUrl}/synthesis?speaker=${this.options.speakerId}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(audioQuery),
+        }
+      );
+
+      if (!synthesisResponse.ok) {
+        throw new Error(`音声合成に失敗しました: ${synthesisResponse.status} ${synthesisResponse.statusText}`);
+      }
+
+      // ArrayBufferを取得してBufferに変換
+      const arrayBuffer = await synthesisResponse.arrayBuffer();
+      const audioBuffer = Buffer.from(arrayBuffer);
+
+      logger.info(`VOICEVOX音声合成成功（メモリ）: ${audioBuffer.length} bytes`);
+      return audioBuffer;
+
     } catch (error) {
-      logger.error(`VOICEVOX音声合成エラー: ${error}`);
+      if (error instanceof Error) {
+        logger.error(`VOICEVOX音声合成エラー: ${error.message}`);
+      } else {
+        logger.error(`VOICEVOX音声合成エラー: ${error}`);
+      }
       throw error;
     }
   }
@@ -101,28 +107,6 @@ export class VoicevoxEngine {
     audioQuery.volumeScale = this.options.volumeScale;
 
     return audioQuery;
-  }
-
-  private async synthesizeAudio(audioQuery: AudioQuery): Promise<Buffer> {
-    const url = `${this.baseUrl}/synthesis`;
-    const params = new URLSearchParams({
-      speaker: this.options.speakerId.toString(),
-    });
-
-    const response = await fetch(`${url}?${params}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(audioQuery),
-    });
-
-    if (!response.ok) {
-      throw new Error(`音声合成エラー: ${response.status} ${response.statusText}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
   }
 
   async getSpeakers(): Promise<VoicevoxSpeaker[]> {

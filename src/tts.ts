@@ -1,8 +1,6 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join } from 'node:path';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { logger, sanitizeFilename, platform, getAudioFormat, platformConfig } from './utils.js';
+import { logger, platform, platformConfig } from './utils.js';
 import { VoicevoxEngine, type VoicevoxOptions, VOICEVOX_PRESETS } from './voicevox.js';
 
 const execAsync = promisify(exec);
@@ -18,18 +16,19 @@ export interface UnifiedTTSOptions extends TTSOptions {
   voicevoxOptions?: Partial<VoicevoxOptions>;
 }
 
+export interface TTSResult {
+  audioBuffer: Buffer;
+  format: string; // 'wav' | 'aiff' | 'mp3' etc.
+  sampleRate?: number;
+  channels?: number;
+}
+
 export class TTSEngine {
-  private outputDir: string;
   private voicevoxEngine?: VoicevoxEngine;
   private engine: 'system' | 'voicevox';
 
   constructor(options?: Partial<UnifiedTTSOptions>) {
-    this.outputDir = join(process.cwd(), 'temp_audio');
     this.engine = options?.engine || 'system';
-    
-    if (!existsSync(this.outputDir)) {
-      mkdirSync(this.outputDir, { recursive: true });
-    }
 
     // VOICEVOXエンジンの初期化
     if (this.engine === 'voicevox') {
@@ -47,20 +46,32 @@ export class TTSEngine {
     }
   }
 
-  async synthesize(text: string, options: TTSOptions): Promise<string> {
+  async synthesize(text: string, options: TTSOptions): Promise<TTSResult> {
     if (this.engine === 'voicevox' && this.voicevoxEngine) {
       return this.synthesizeWithVoicevox(text);
     }
     return this.synthesizeWithSystemTTS(text, options);
   }
 
-  private async synthesizeWithVoicevox(text: string): Promise<string> {
+  private async synthesizeWithVoicevox(text: string): Promise<TTSResult> {
     if (!this.voicevoxEngine) {
       throw new Error('VOICEVOXエンジンが初期化されていません');
     }
 
     try {
-      return await this.voicevoxEngine.synthesize(text);
+      logger.info(`VOICEVOX音声合成開始（メモリ）: ${text.substring(0, 50)}...`);
+      
+      // VOICEVOXから直接Bufferを取得
+      const audioBuffer = await this.voicevoxEngine.synthesizeToBuffer(text);
+      
+      logger.info(`VOICEVOX音声合成完了（メモリ）: ${audioBuffer.length} bytes`);
+      
+      return {
+        audioBuffer,
+        format: 'wav',
+        sampleRate: 24000, // VOICEVOXのデフォルトサンプルレート
+        channels: 1, // モノラル
+      };
     } catch (error) {
       logger.error(`VOICEVOX合成エラー、システムTTSにフォールバック: ${error}`);
       
@@ -73,7 +84,7 @@ export class TTSEngine {
     }
   }
 
-  private async synthesizeWithSystemTTS(text: string, options: TTSOptions): Promise<string> {
+  private async synthesizeWithSystemTTS(text: string, options: TTSOptions): Promise<TTSResult> {
     if (platform.isWindows()) {
       return this.synthesizeWithWindowsTTS(text, options);
     }
@@ -83,78 +94,77 @@ export class TTSEngine {
     throw new Error(`プラットフォーム ${platform.current()} はサポートされていません`);
   }
 
-  private async synthesizeWithWindowsTTS(text: string, options: TTSOptions): Promise<string> {
-    const audioFormat = getAudioFormat();
-    const filename = `tts_${Date.now()}_${sanitizeFilename(text)}.${audioFormat}`;
-    const outputPath = join(this.outputDir, filename);
-
-    // Windows SAPI using PowerShell
+  private async synthesizeWithWindowsTTS(text: string, options: TTSOptions): Promise<TTSResult> {
+    // Windows SAPI using PowerShell でメモリストリームに出力
     const psScript = `
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $synth.SelectVoice("${options.voice}")
 $synth.Rate = ${Math.round((options.rate - 200) / 50)} # Convert to SAPI rate (-10 to 10)
 $synth.Volume = ${options.volume}
-$synth.SetOutputToWaveFile("${outputPath.replace(/\\/g, '/')}")
+
+# メモリストリームに出力
+$memoryStream = New-Object System.IO.MemoryStream
+$synth.SetOutputToWaveStream($memoryStream)
 $synth.Speak("${text.replace(/"/g, '`"')}")
+
+# バイナリデータを標準出力にBase64エンコードで出力
+$bytes = $memoryStream.ToArray()
+[System.Convert]::ToBase64String($bytes)
+
 $synth.Dispose()
+$memoryStream.Dispose()
     `.trim();
 
     try {
-      logger.info(`Windows TTS合成開始: ${text.substring(0, 50)}...`);
+      logger.info(`Windows TTS合成開始（メモリ）: ${text.substring(0, 50)}...`);
       
-      // PowerShell スクリプトを実行
-      await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
+      const { stdout } = await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
+      const base64Data = stdout.trim();
+      const audioBuffer = Buffer.from(base64Data, 'base64');
       
-      if (!existsSync(outputPath)) {
-        throw new Error(`音声ファイルの生成に失敗しました: ${outputPath}`);
-      }
-
-      logger.info(`Windows TTS合成完了: ${outputPath}`);
-      return outputPath;
+      logger.info(`Windows TTS合成完了（メモリ）: ${audioBuffer.length} bytes`);
+      
+      return {
+        audioBuffer,
+        format: 'wav',
+        sampleRate: 22050, // Windows SAPIのデフォルト
+        channels: 1,
+      };
     } catch (error) {
       logger.error(`Windows TTS合成エラー: ${error}`);
       throw error;
     }
   }
 
-  private async synthesizeWithMacOSTTS(text: string, options: TTSOptions): Promise<string> {
-    const audioFormat = getAudioFormat();
-    const filename = `tts_${Date.now()}_${sanitizeFilename(text)}.${audioFormat}`;
-    const outputPath = join(this.outputDir, filename);
-
+  private async synthesizeWithMacOSTTS(text: string, options: TTSOptions): Promise<TTSResult> {
+    // macOS sayコマンドでstdoutに直接出力
     const command = [
       'say',
       '-v', options.voice,
       '-r', options.rate.toString(),
-      '-o', `"${outputPath}"`,
+      '--data-format=LEF32@22050', // リニアPCM形式で出力
+      '-o', '-', // 標準出力に出力
       `"${text.replace(/"/g, '\\"')}"`
     ].join(' ');
 
     try {
-      logger.info(`macOS TTS合成開始: ${text.substring(0, 50)}...`);
-      await execAsync(command);
+      logger.info(`macOS TTS合成開始（メモリ）: ${text.substring(0, 50)}...`);
       
-      if (!existsSync(outputPath)) {
-        throw new Error(`音声ファイルの生成に失敗しました: ${outputPath}`);
-      }
-
-      logger.info(`macOS TTS合成完了: ${outputPath}`);
-      return outputPath;
+      const { stdout } = await execAsync(command, { encoding: 'buffer' });
+      const audioBuffer = stdout as Buffer;
+      
+      logger.info(`macOS TTS合成完了（メモリ）: ${audioBuffer.length} bytes`);
+      
+      return {
+        audioBuffer,
+        format: 'raw', // PCMデータ
+        sampleRate: 22050,
+        channels: 1,
+      };
     } catch (error) {
       logger.error(`macOS TTS合成エラー: ${error}`);
       throw error;
-    }
-  }
-
-  async cleanupFile(filePath: string): Promise<void> {
-    try {
-      if (existsSync(filePath)) {
-        unlinkSync(filePath);
-        logger.debug(`一時ファイル削除: ${filePath}`);
-      }
-    } catch (error) {
-      logger.warn(`ファイル削除エラー: ${error}`);
     }
   }
 
@@ -255,16 +265,16 @@ $synth.Dispose()
 
   getEngineInfo(): string {
     if (this.engine === 'voicevox') {
-      return 'VOICEVOX';
+      return 'VOICEVOX (メモリ)';
     }
     
     if (platform.isWindows()) {
-      return 'Windows SAPI';
+      return 'Windows SAPI (メモリ)';
     }
     if (platform.isMacOS()) {
-      return 'macOS TTS';
+      return 'macOS TTS (メモリ)';
     }
-    return 'System TTS';
+    return 'System TTS (メモリ)';
   }
 
   async getVoicevoxPresets(): Promise<Array<{ key: string; name: string; style: string; id: number }>> {

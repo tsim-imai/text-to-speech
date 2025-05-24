@@ -87,39 +87,34 @@ class DiscordTTSBridge {
     }
 
     this.isProcessing = true;
-    let audioFilePath: string | undefined;
 
     try {
-      // TTS 合成
+      // TTS 合成（メモリベース）
       const ttsOptions: TTSOptions = {
         voice: this.options.voice,
         rate: this.options.rate,
         volume: this.options.volume,
       };
 
-      audioFilePath = await this.ttsEngine.synthesize(text, ttsOptions);
+      const ttsResult = await this.ttsEngine.synthesize(text, ttsOptions);
 
       // BlackHole デバイスに切り替え
       await this.audioPlayer.switchToBlackHole();
 
-      // 音声再生
+      // 音声再生（メモリベース）
       if (this.options.useAfplay) {
-        await this.audioPlayer.playWithAfplay(audioFilePath);
+        await this.audioPlayer.playWithAfplayFromBuffer(ttsResult);
       } else if (this.options.enableDualOutput) {
-        await this.audioPlayer.playWithDualOutput(audioFilePath);
+        await this.audioPlayer.playWithDualOutputFromBuffer(ttsResult);
       } else {
-        await this.audioPlayer.playAudio(audioFilePath);
+        await this.audioPlayer.playAudioFromBuffer(ttsResult);
       }
 
-      logger.info(`読み上げ完了: [${author}] ${text.substring(0, 50)}...`);
+      logger.info(`読み上げ完了（メモリ）: [${author}] ${text.substring(0, 50)}... (${ttsResult.audioBuffer.length} bytes)`);
 
     } catch (error) {
       logger.error(`メッセージ処理エラー: ${error}`);
     } finally {
-      // 一時ファイル削除
-      if (audioFilePath) {
-        await this.ttsEngine.cleanupFile(audioFilePath);
-      }
       this.isProcessing = false;
     }
   }
