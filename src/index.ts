@@ -98,8 +98,13 @@ class DiscordTTSBridge {
 
       const ttsResult = await this.ttsEngine.synthesize(text, ttsOptions);
 
-      // BlackHole デバイスに切り替え
-      await this.audioPlayer.switchToBlackHole();
+      // VOICEVOXエンジン使用時は音声デバイス切り替えをスキップ（Windows互換性向上）
+      if (this.options.engine !== 'voicevox') {
+        // BlackHole デバイスに切り替え
+        await this.audioPlayer.switchToBlackHole();
+      } else {
+        logger.debug('VOICEVOXエンジン使用時、音声デバイス切り替えをスキップします');
+      }
 
       // 音声再生（メモリベース）
       if (this.options.useAfplay) {

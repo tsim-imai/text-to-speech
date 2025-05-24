@@ -445,48 +445,32 @@ $player2.Close()
       }
     } catch (error) {
       logger.error(`音声デバイス切り替えエラー: ${error}`);
-      throw error;
+      // 音声デバイス切り替えエラーは致命的ではないため、警告のみでスキップ
+      logger.warn('音声デバイス切り替えをスキップして続行します');
     }
   }
 
   private async switchWindowsAudioDevice(deviceName: string): Promise<void> {
-    // Windows: NirCmdまたはPowerShellを使用
+    // Windows: まずNirCmdを試す（推奨）
     try {
-      // まずNirCmdを試す
       await execAsync(`nircmd setdefaultsounddevice "${deviceName}"`);
       logger.info(`出力デバイスを ${deviceName} に切り替えました (NirCmd)`);
-    } catch (error) {
-      // NirCmdが利用できない場合はPowerShellを使用
-      logger.debug(`NirCmdが利用できません、PowerShellを使用: ${error}`);
-      
-      const psScript = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class AudioDeviceManager {
-    [DllImport("winmm.dll")]
-    public static extern int waveOutGetNumDevs();
-    
-    [DllImport("winmm.dll")]
-    public static extern int waveOutGetDevCaps(IntPtr hwo, ref WAVEOUTCAPS pwoc, int cbwoc);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct WAVEOUTCAPS {
-        public short wMid;
-        public short wPid;
-        public int vDriverVersion;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string szPname;
+      return;
+    } catch (nircmdError) {
+      logger.debug(`NirCmdが利用できません: ${nircmdError}`);
     }
-}
-"@
 
-# デバイス一覧を取得して切り替え
-Write-Output "音声デバイスを ${deviceName} に設定中..."
-      `.trim();
-
-      await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
-      logger.info(`出力デバイスを ${deviceName} に切り替えました (PowerShell)`);
+    // NirCmdが利用できない場合は、複雑なPowerShellスクリプトは使わず警告のみ
+    try {
+      // 簡単なPowerShellコマンドでデバイス確認のみ
+      const psScript = 'Get-WmiObject -Class Win32_SoundDevice | Select-Object -First 1 -ExpandProperty Name';
+      const { stdout } = await execAsync(`powershell -Command "${psScript}"`);
+      logger.info(`現在の音声デバイス: ${stdout.trim()}`);
+      logger.warn('PowerShellによる音声デバイス切り替えは複雑なため、スキップします。NirCmdの使用を推奨します。');
+      logger.info('NirCmdダウンロード: https://www.nirsoft.net/utils/nircmd.html');
+    } catch (error) {
+      logger.warn(`Windows音声デバイス情報取得エラー: ${error}`);
+      logger.warn('音声デバイス切り替えをスキップします');
     }
   }
 
