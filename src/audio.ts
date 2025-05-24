@@ -1,8 +1,5 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import player from 'play-sound';
 import { logger, platform, platformConfig } from './utils.js';
 import type { TTSResult } from './tts.js';
 
@@ -15,7 +12,6 @@ export interface AudioPlayerOptions {
 }
 
 export class AudioPlayer {
-  private audioPlayer: ReturnType<typeof player>;
   private blackholeDevice: string;
   private enableDualOutput: boolean;
   private speakerDevice: string | undefined;
@@ -29,30 +25,22 @@ export class AudioPlayer {
     this.blackholeDevice = options.blackholeDevice ?? defaultBlackhole;
     this.enableDualOutput = options.enableDualOutput || false;
     this.speakerDevice = options.speakerDevice;
-    this.audioPlayer = player();
   }
 
-  // メモリベースの音声再生（メインメソッド）
+  // メモリベースの音声再生（メインメソッド） - 完全ネイティブ実装
   async playAudioFromBuffer(ttsResult: TTSResult): Promise<void> {
-    // プラットフォーム別の最適化された再生方法を選択
-    if (platform.isMacOS() && ttsResult.format === 'raw') {
-      // PCMデータはafplayで直接再生（一時ファイル不要）
-      return this.playRawPCMWithAfplay(ttsResult);
+    // プラットフォーム別のネイティブ再生（一時ファイル完全不要）
+    if (platform.isWindows()) {
+      return this.playOnWindowsNative(ttsResult);
     }
-
-    if (platform.isWindows() && ttsResult.format === 'wav') {
-      // WAVデータはPowerShellで直接再生（一時ファイル不要）
-      return this.playWAVWithPowerShell(ttsResult);
-    }
-
-    // フォールバック: 最小限の一時ファイル使用
-    const tempFilePath = await this.bufferToTempFile(ttsResult);
     
-    try {
-      await this.playAudio(tempFilePath);
-    } finally {
-      await this.cleanupTempFile(tempFilePath);
+    if (platform.isMacOS()) {
+      return this.playOnMacOSNative(ttsResult);
     }
+
+    // Linux等の場合（フォールバック）
+    logger.warn(`プラットフォーム ${platform.current()} での完全メモリベース再生は未実装です`);
+    throw new Error(`サポートされていないプラットフォーム: ${platform.current()}`);
   }
 
   // デュアル出力でのメモリベース再生
@@ -62,12 +50,12 @@ export class AudioPlayer {
     }
 
     try {
-      if (platform.isWindows() && ttsResult.format === 'wav') {
-        // Windows: メモリベースデュアル再生
-        await this.playOnWindowsDevicesFromBuffer(ttsResult);
+      if (platform.isWindows()) {
+        // Windows: ネイティブデュアル再生
+        await this.playOnWindowsDevicesNative(ttsResult);
       } else if (platform.isMacOS()) {
-        // macOS: 複数デバイスでの再生
-        await this.playOnMacOSDevicesFromBuffer(ttsResult);
+        // macOS: 複数デバイスでのネイティブ再生
+        await this.playOnMacOSDevicesNative(ttsResult);
       } else {
         // フォールバック
         await this.playAudioFromBuffer(ttsResult);
@@ -86,23 +74,11 @@ export class AudioPlayer {
       return this.playAudioFromBuffer(ttsResult);
     }
 
-    if (ttsResult.format === 'raw') {
-      // PCMデータの場合は標準入力経由で再生（完全メモリベース）
-      return this.playRawPCMWithAfplay(ttsResult);
-    }
-
-    // WAVファイルの場合は一時ファイル経由
-    const tempFilePath = await this.bufferToTempFile(ttsResult);
-    
-    try {
-      await this.playWithAfplay(tempFilePath);
-    } finally {
-      await this.cleanupTempFile(tempFilePath);
-    }
+    return this.playOnMacOSNative(ttsResult);
   }
 
-  // WindowsでPowerShellを使った完全メモリベースWAV再生
-  private async playWAVWithPowerShell(ttsResult: TTSResult): Promise<void> {
+  // Windows完全ネイティブ再生
+  private async playOnWindowsNative(ttsResult: TTSResult): Promise<void> {
     const base64Audio = ttsResult.audioBuffer.toString('base64');
     
     const psScript = `
@@ -115,8 +91,11 @@ $player.Open($stream)
 $player.Play()
 
 # 再生完了まで待機
-while($player.Position -lt $player.NaturalDuration.TimeSpan -and $player.NaturalDuration.HasTimeSpan) {
+$timeout = 30000  # 30秒タイムアウト
+$elapsed = 0
+while($player.Position -lt $player.NaturalDuration.TimeSpan -and $player.NaturalDuration.HasTimeSpan -and $elapsed -lt $timeout) {
   Start-Sleep -Milliseconds 100
+  $elapsed += 100
 }
 
 $player.Stop()
@@ -125,11 +104,131 @@ $stream.Dispose()
     `.trim();
 
     try {
-      logger.info(`Windows WAV再生開始（完全メモリ）: ${ttsResult.audioBuffer.length} bytes`);
+      logger.info(`Windows ネイティブ再生開始（完全メモリ）: ${ttsResult.format}, ${ttsResult.audioBuffer.length} bytes`);
       await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
-      logger.info('Windows WAV再生完了（完全メモリ）');
+      logger.info('Windows ネイティブ再生完了（完全メモリ）');
     } catch (error) {
-      logger.error(`Windows メモリベースWAV再生エラー: ${error}`);
+      logger.error(`Windows ネイティブ再生エラー: ${error}`);
+      throw error;
+    }
+  }
+
+  // macOS完全ネイティブ再生
+  private async playOnMacOSNative(ttsResult: TTSResult): Promise<void> {
+    if (ttsResult.format === 'raw') {
+      // PCMデータはafplay stdin経由（完全メモリベース）
+      return this.playRawPCMWithAfplay(ttsResult);
+    }
+
+    // WAV, AIFF等のファイルフォーマットもafplay stdin経由
+    return this.playAudioFormatWithAfplay(ttsResult);
+  }
+
+  // Windowsでの複数デバイス再生（完全ネイティブ）
+  private async playOnWindowsDevicesNative(ttsResult: TTSResult): Promise<void> {
+    const base64Audio = ttsResult.audioBuffer.toString('base64');
+    
+    const psScript = `
+Add-Type -AssemblyName PresentationCore
+$audioBytes = [System.Convert]::FromBase64String("${base64Audio}")
+$stream1 = New-Object System.IO.MemoryStream(,$audioBytes)
+$stream2 = New-Object System.IO.MemoryStream(,$audioBytes)
+
+$player1 = New-Object System.Windows.Media.MediaPlayer
+$player2 = New-Object System.Windows.Media.MediaPlayer
+
+$player1.Open($stream1)
+$player2.Open($stream2)
+
+$player1.Play()
+$player2.Play()
+
+# 再生完了まで待機
+$timeout = 30000  # 30秒タイムアウト
+$elapsed = 0
+while($player1.Position -lt $player1.NaturalDuration.TimeSpan -and $player1.NaturalDuration.HasTimeSpan -and $elapsed -lt $timeout) {
+  Start-Sleep -Milliseconds 100
+  $elapsed += 100
+}
+
+$player1.Stop()
+$player2.Stop()
+$player1.Close()
+$player2.Close()
+$stream1.Dispose()
+$stream2.Dispose()
+    `.trim();
+
+    try {
+      logger.info(`Windows デュアル出力再生開始（完全ネイティブ）: ${ttsResult.audioBuffer.length} bytes`);
+      await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
+      logger.info('Windows デュアル出力再生完了（完全ネイティブ）');
+    } catch (error) {
+      logger.error(`Windows ネイティブデュアル再生エラー: ${error}`);
+      throw error;
+    }
+  }
+
+  // macOSでの複数デバイス再生（完全ネイティブ）
+  private async playOnMacOSDevicesNative(ttsResult: TTSResult): Promise<void> {
+    if (!this.speakerDevice) {
+      throw new Error('スピーカーデバイスが指定されていません');
+    }
+
+    // 複数デバイスで同時ネイティブ再生
+    const promises = [
+      this.playOnSpecificMacOSDeviceNative(ttsResult, this.blackholeDevice),
+      this.playOnSpecificMacOSDeviceNative(ttsResult, this.speakerDevice),
+    ];
+    await Promise.all(promises);
+  }
+
+  // 特定デバイスでの完全ネイティブ再生
+  private async playOnSpecificMacOSDeviceNative(ttsResult: TTSResult, deviceName: string): Promise<void> {
+    const originalDevice = await this.getCurrentOutputDevice();
+    
+    try {
+      await this.switchToDevice(deviceName);
+      await this.playOnMacOSNative(ttsResult);
+    } finally {
+      if (originalDevice) {
+        await this.switchToDevice(originalDevice);
+      }
+    }
+  }
+
+  // 音声フォーマットをafplayで再生（完全メモリベース）
+  private async playAudioFormatWithAfplay(ttsResult: TTSResult): Promise<void> {
+    try {
+      logger.info(`macOS 音声フォーマット再生開始（完全メモリ）: ${ttsResult.format}, ${ttsResult.audioBuffer.length} bytes`);
+      
+      const { spawn } = await import('node:child_process');
+      const afplayProcess = spawn('afplay', ['-'], {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      // 音声データを標準入力に送信
+      afplayProcess.stdin.write(ttsResult.audioBuffer);
+      afplayProcess.stdin.end();
+
+      return new Promise((resolve, reject) => {
+        afplayProcess.on('close', (code) => {
+          if (code === 0) {
+            logger.info('macOS 音声フォーマット再生完了（完全メモリ）');
+            resolve();
+          } else {
+            reject(new Error(`afplay process exited with code ${code}`));
+          }
+        });
+
+        afplayProcess.on('error', (error) => {
+          logger.error(`afplay process error: ${error}`);
+          reject(error);
+        });
+      });
+
+    } catch (error) {
+      logger.error(`macOS 音声フォーマット再生エラー: ${error}`);
       throw error;
     }
   }
@@ -178,255 +277,6 @@ $stream.Dispose()
     } catch (error) {
       logger.error(`PCM音声再生エラー: ${error}`);
       throw error;
-    }
-  }
-
-  // macOSでの複数デバイス再生（完全メモリベース対応）
-  private async playOnMacOSDevicesFromBuffer(ttsResult: TTSResult): Promise<void> {
-    if (!this.speakerDevice) {
-      throw new Error('スピーカーデバイスが指定されていません');
-    }
-
-    if (ttsResult.format === 'raw') {
-      // PCMデータの場合は完全メモリベース
-      const promises = [
-        this.playOnSpecificMacOSDeviceFromBuffer(ttsResult, this.blackholeDevice),
-        this.playOnSpecificMacOSDeviceFromBuffer(ttsResult, this.speakerDevice),
-      ];
-      await Promise.all(promises);
-    } else {
-      // WAVファイルの場合は一時ファイル経由
-      const tempFilePath = await this.bufferToTempFile(ttsResult);
-      try {
-        await this.playOnMacOSDevices(tempFilePath);
-      } finally {
-        await this.cleanupTempFile(tempFilePath);
-      }
-    }
-  }
-
-  // 特定デバイスでの完全メモリベース再生
-  private async playOnSpecificMacOSDeviceFromBuffer(ttsResult: TTSResult, deviceName: string): Promise<void> {
-    const originalDevice = await this.getCurrentOutputDevice();
-    
-    try {
-      await this.switchToDevice(deviceName);
-      await this.playRawPCMWithAfplay(ttsResult);
-    } finally {
-      if (originalDevice) {
-        await this.switchToDevice(originalDevice);
-      }
-    }
-  }
-
-  // Windowsでの複数デバイス再生（メモリベース）
-  private async playOnWindowsDevicesFromBuffer(ttsResult: TTSResult): Promise<void> {
-    if (ttsResult.format !== 'wav') {
-      // WAVでない場合は一時ファイル経由
-      const tempFilePath = await this.bufferToTempFile(ttsResult);
-      try {
-        await this.playOnWindowsDevices(tempFilePath);
-      } finally {
-        await this.cleanupTempFile(tempFilePath);
-      }
-      return;
-    }
-
-    // WAVデータを直接メモリで扱う（完全メモリベース）
-    const base64Audio = ttsResult.audioBuffer.toString('base64');
-    
-    const psScript = `
-Add-Type -AssemblyName PresentationCore
-$audioBytes = [System.Convert]::FromBase64String("${base64Audio}")
-$stream1 = New-Object System.IO.MemoryStream(,$audioBytes)
-$stream2 = New-Object System.IO.MemoryStream(,$audioBytes)
-
-$player1 = New-Object System.Windows.Media.MediaPlayer
-$player2 = New-Object System.Windows.Media.MediaPlayer
-
-$player1.Open($stream1)
-$player2.Open($stream2)
-
-$player1.Play()
-$player2.Play()
-
-# 再生完了まで待機
-while($player1.Position -lt $player1.NaturalDuration.TimeSpan -and $player1.NaturalDuration.HasTimeSpan) {
-  Start-Sleep -Milliseconds 100
-}
-
-$player1.Stop()
-$player2.Stop()
-$player1.Close()
-$player2.Close()
-$stream1.Dispose()
-$stream2.Dispose()
-    `.trim();
-
-    try {
-      logger.info(`Windows デュアル出力再生開始（完全メモリ）: ${ttsResult.audioBuffer.length} bytes`);
-      await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
-      logger.info('Windows デュアル出力再生完了（完全メモリ）');
-    } catch (error) {
-      logger.error(`Windows メモリベース再生エラー: ${error}`);
-      // フォールバック
-      await this.playAudioFromBuffer(ttsResult);
-    }
-  }
-
-  // Bufferを一時ファイルに変換（最後の手段）
-  private async bufferToTempFile(ttsResult: TTSResult): Promise<string> {
-    // 一時ディレクトリを遅延作成（本当に必要な時のみ）
-    const tempDir = join(process.cwd(), 'temp_audio');
-    if (!existsSync(tempDir)) {
-      const { mkdirSync } = await import('node:fs');
-      mkdirSync(tempDir, { recursive: true });
-      logger.debug(`一時ディレクトリ作成: ${tempDir}`);
-    }
-
-    const extension = this.getFileExtension(ttsResult.format);
-    const filename = `tts_memory_${Date.now()}_${Math.random().toString(36).substring(7)}.${extension}`;
-    const filePath = join(tempDir, filename);
-
-    writeFileSync(filePath, ttsResult.audioBuffer);
-    logger.debug(`一時ファイル作成（フォールバック）: ${filePath} (${ttsResult.audioBuffer.length} bytes)`);
-    
-    return filePath;
-  }
-
-  // フォーマットから拡張子を取得
-  private getFileExtension(format: string): string {
-    switch (format) {
-      case 'wav': return 'wav';
-      case 'aiff': return 'aiff';
-      case 'mp3': return 'mp3';
-      case 'raw': return 'raw';
-      default: return 'wav';
-    }
-  }
-
-  // 一時ファイル削除
-  private async cleanupTempFile(filePath: string): Promise<void> {
-    try {
-      if (existsSync(filePath)) {
-        unlinkSync(filePath);
-        logger.debug(`一時ファイル削除: ${filePath}`);
-      }
-    } catch (error) {
-      logger.warn(`一時ファイル削除エラー: ${error}`);
-    }
-  }
-
-  // 既存メソッドはそのまま保持（後方互換性）
-  async playAudio(filePath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      logger.info(`音声再生開始: ${filePath}`);
-      
-      this.audioPlayer.play(filePath, (err) => {
-        if (err) {
-          logger.error(`音声再生エラー: ${err}`);
-          reject(err);
-        } else {
-          logger.info(`音声再生完了: ${filePath}`);
-          resolve();
-        }
-      });
-    });
-  }
-
-  async playWithAfplay(filePath: string): Promise<void> {
-    if (!platform.isMacOS()) {
-      logger.warn('afplayはmacOSでのみ利用可能です。通常の再生方法を使用します。');
-      return this.playAudio(filePath);
-    }
-
-    try {
-      logger.info(`音声再生開始 (afplay): ${filePath}`);
-      await execAsync(`afplay "${filePath}"`);
-      logger.info(`音声再生完了 (afplay): ${filePath}`);
-    } catch (error) {
-      logger.error(`afplay再生エラー: ${error}`);
-      throw error;
-    }
-  }
-
-  async playWithDualOutput(filePath: string): Promise<void> {
-    if (!this.enableDualOutput || !this.speakerDevice) {
-      return this.playAudio(filePath);
-    }
-
-    try {
-      logger.info(`デュアル出力再生開始: ${filePath}`);
-
-      if (platform.isWindows()) {
-        // Windows: 複数デバイスへの同時再生
-        await this.playOnWindowsDevices(filePath);
-      } else if (platform.isMacOS()) {
-        // macOS: SwitchAudioSourceを使用
-        await this.playOnMacOSDevices(filePath);
-      } else {
-        // フォールバック
-        await this.playAudio(filePath);
-      }
-    } catch (error) {
-      logger.error(`デュアル出力再生エラー: ${error}`);
-      // フォールバック
-      await this.playAudio(filePath);
-    }
-  }
-
-  private async playOnWindowsDevices(filePath: string): Promise<void> {
-    // Windows PowerShellを使用して複数デバイスに再生
-    const psScript = `
-Add-Type -AssemblyName PresentationCore
-$player1 = New-Object System.Windows.Media.MediaPlayer
-$player2 = New-Object System.Windows.Media.MediaPlayer
-
-$player1.Open("${filePath.replace(/\\/g, '/')}")
-$player2.Open("${filePath.replace(/\\/g, '/')}")
-
-$player1.Play()
-$player2.Play()
-
-# 再生完了まで待機
-while($player1.Position -lt $player1.NaturalDuration.TimeSpan) {
-  Start-Sleep -Milliseconds 100
-}
-
-$player1.Stop()
-$player2.Stop()
-$player1.Close()
-$player2.Close()
-    `.trim();
-
-    await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
-  }
-
-  private async playOnMacOSDevices(filePath: string): Promise<void> {
-    // macOS: 複数デバイスに同時再生
-    if (!this.speakerDevice) {
-      throw new Error('スピーカーデバイスが指定されていません');
-    }
-
-    const promises = [
-      this.playOnSpecificMacOSDevice(filePath, this.blackholeDevice),
-      this.playOnSpecificMacOSDevice(filePath, this.speakerDevice),
-    ];
-
-    await Promise.all(promises);
-  }
-
-  private async playOnSpecificMacOSDevice(filePath: string, deviceName: string): Promise<void> {
-    // 一時的にデバイスを切り替えて再生
-    const originalDevice = await this.getCurrentOutputDevice();
-    
-    try {
-      await this.switchToDevice(deviceName);
-      await this.playWithAfplay(filePath);
-    } finally {
-      if (originalDevice) {
-        await this.switchToDevice(originalDevice);
-      }
     }
   }
 
@@ -496,9 +346,7 @@ $player2.Close()
 
   private async getCurrentWindowsDevice(): Promise<string | null> {
     try {
-      const psScript = `
-Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Select-Object -First 1 -ExpandProperty Name
-      `.trim();
+      const psScript = 'Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Select-Object -First 1 -ExpandProperty Name';
 
       const { stdout } = await execAsync(`powershell -Command "${psScript}"`);
       return stdout.trim() || null;
@@ -535,9 +383,7 @@ Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Sel
 
   private async listWindowsDevices(): Promise<string[]> {
     try {
-      const psScript = `
-Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Select-Object -ExpandProperty Name
-      `.trim();
+      const psScript = 'Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Select-Object -ExpandProperty Name';
 
       const { stdout } = await execAsync(`powershell -Command "${psScript}"`);
       return stdout
@@ -573,5 +419,38 @@ Get-WmiObject -Class Win32_SoundDevice | Where-Object {$_.Status -eq "OK"} | Sel
       logger.debug(`仮想音声デバイス確認エラー: ${error}`);
       return false;
     }
+  }
+
+  // 後方互換性のためのメソッド（内部で完全メモリベース実装を使用）
+  async playAudio(filePath: string): Promise<void> {
+    logger.warn(`従来のファイルベース再生は非推奨です: ${filePath}`);
+    logger.info('メモリベース再生への移行を推奨します');
+    // ファイル内容を読み込んでメモリベース再生にリダイレクト
+    try {
+      const { readFileSync } = await import('node:fs');
+      const audioBuffer = readFileSync(filePath);
+      const ttsResult = {
+        audioBuffer,
+        format: filePath.endsWith('.wav') ? 'wav' : 'unknown',
+        sampleRate: 22050,
+        channels: 1,
+      };
+      await this.playAudioFromBuffer(ttsResult);
+    } catch (error) {
+      logger.error(`ファイルベース再生エラー: ${error}`);
+      throw error;
+    }
+  }
+
+  async playWithAfplay(filePath: string): Promise<void> {
+    logger.warn(`従来のafplay再生は非推奨です: ${filePath}`);
+    logger.info('メモリベース再生への移行を推奨します');
+    return this.playAudio(filePath);
+  }
+
+  async playWithDualOutput(filePath: string): Promise<void> {
+    logger.warn(`従来のデュアル出力再生は非推奨です: ${filePath}`);
+    logger.info('メモリベース再生への移行を推奨します');
+    return this.playAudio(filePath);
   }
 } 
