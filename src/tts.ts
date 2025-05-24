@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { logger, sanitizeFilename } from './utils.js';
+import { logger, sanitizeFilename, platform, getAudioFormat, platformConfig } from './utils.js';
 import { VoicevoxEngine, type VoicevoxOptions, VOICEVOX_PRESETS } from './voicevox.js';
 
 const execAsync = promisify(exec);
@@ -14,18 +14,18 @@ export interface TTSOptions {
 }
 
 export interface UnifiedTTSOptions extends TTSOptions {
-  engine: 'macos' | 'voicevox';
+  engine: 'system' | 'voicevox'; // 'macos' -> 'system' に変更
   voicevoxOptions?: Partial<VoicevoxOptions>;
 }
 
 export class TTSEngine {
   private outputDir: string;
   private voicevoxEngine?: VoicevoxEngine;
-  private engine: 'macos' | 'voicevox';
+  private engine: 'system' | 'voicevox';
 
   constructor(options?: Partial<UnifiedTTSOptions>) {
     this.outputDir = join(process.cwd(), 'temp_audio');
-    this.engine = options?.engine || 'macos';
+    this.engine = options?.engine || 'system';
     
     if (!existsSync(this.outputDir)) {
       mkdirSync(this.outputDir, { recursive: true });
@@ -51,7 +51,7 @@ export class TTSEngine {
     if (this.engine === 'voicevox' && this.voicevoxEngine) {
       return this.synthesizeWithVoicevox(text);
     }
-    return this.synthesizeWithMacOS(text, options);
+    return this.synthesizeWithSystemTTS(text, options);
   }
 
   private async synthesizeWithVoicevox(text: string): Promise<string> {
@@ -62,19 +62,65 @@ export class TTSEngine {
     try {
       return await this.voicevoxEngine.synthesize(text);
     } catch (error) {
-      logger.error(`VOICEVOX合成エラー、macOS TTSにフォールバック: ${error}`);
+      logger.error(`VOICEVOX合成エラー、システムTTSにフォールバック: ${error}`);
       
-      // フォールバック: macOS TTSを使用
-      return this.synthesizeWithMacOS(text, {
-        voice: 'Kyoko',
+      // フォールバック: システムTTSを使用
+      return this.synthesizeWithSystemTTS(text, {
+        voice: platform.isWindows() ? 'Haruka' : 'Kyoko',
         rate: 230,
         volume: 50,
       });
     }
   }
 
-  private async synthesizeWithMacOS(text: string, options: TTSOptions): Promise<string> {
-    const filename = `tts_${Date.now()}_${sanitizeFilename(text)}.aiff`;
+  private async synthesizeWithSystemTTS(text: string, options: TTSOptions): Promise<string> {
+    if (platform.isWindows()) {
+      return this.synthesizeWithWindowsTTS(text, options);
+    }
+    if (platform.isMacOS()) {
+      return this.synthesizeWithMacOSTTS(text, options);
+    }
+    throw new Error(`プラットフォーム ${platform.current()} はサポートされていません`);
+  }
+
+  private async synthesizeWithWindowsTTS(text: string, options: TTSOptions): Promise<string> {
+    const audioFormat = getAudioFormat();
+    const filename = `tts_${Date.now()}_${sanitizeFilename(text)}.${audioFormat}`;
+    const outputPath = join(this.outputDir, filename);
+
+    // Windows SAPI using PowerShell
+    const psScript = `
+Add-Type -AssemblyName System.Speech
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth.SelectVoice("${options.voice}")
+$synth.Rate = ${Math.round((options.rate - 200) / 50)} # Convert to SAPI rate (-10 to 10)
+$synth.Volume = ${options.volume}
+$synth.SetOutputToWaveFile("${outputPath.replace(/\\/g, '/')}")
+$synth.Speak("${text.replace(/"/g, '`"')}")
+$synth.Dispose()
+    `.trim();
+
+    try {
+      logger.info(`Windows TTS合成開始: ${text.substring(0, 50)}...`);
+      
+      // PowerShell スクリプトを実行
+      await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`);
+      
+      if (!existsSync(outputPath)) {
+        throw new Error(`音声ファイルの生成に失敗しました: ${outputPath}`);
+      }
+
+      logger.info(`Windows TTS合成完了: ${outputPath}`);
+      return outputPath;
+    } catch (error) {
+      logger.error(`Windows TTS合成エラー: ${error}`);
+      throw error;
+    }
+  }
+
+  private async synthesizeWithMacOSTTS(text: string, options: TTSOptions): Promise<string> {
+    const audioFormat = getAudioFormat();
+    const filename = `tts_${Date.now()}_${sanitizeFilename(text)}.${audioFormat}`;
     const outputPath = join(this.outputDir, filename);
 
     const command = [
@@ -129,33 +175,74 @@ export class TTSEngine {
         logger.error(`VOICEVOX音声一覧取得エラー: ${error}`);
         return Object.keys(VOICEVOX_PRESETS);
       }
-    } else {
-      // macOS TTSの音声一覧取得
-      try {
-        const { stdout } = await execAsync('say -v "?"');
-        const voices = stdout
-          .split('\n')
-          .filter(line => line.trim())
-          .map(line => line.split(/\s+/)[0])
-          .filter(voice => voice);
-        
-        return voices;
-      } catch (error) {
-        logger.error(`macOS TTS音声一覧取得エラー: ${error}`);
-        return ['Kyoko', 'Otoya', 'O-ren']; // デフォルト日本語音声
-      }
+    }
+
+    // システム TTS の音声一覧取得
+    if (platform.isWindows()) {
+      return this.getWindowsVoices();
+    }
+    if (platform.isMacOS()) {
+      return this.getMacOSVoices();
+    }
+    
+    return ['default'];
+  }
+
+  private async getWindowsVoices(): Promise<string[]> {
+    try {
+      const psScript = `
+Add-Type -AssemblyName System.Speech
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }
+$synth.Dispose()
+      `.trim();
+
+      const { stdout } = await execAsync(`powershell -Command "${psScript}"`);
+      const voices = stdout
+        .split('\n')
+        .map(line => line.trim())
+        .filter(voice => voice);
+      
+      return voices.length > 0 ? voices : [...platformConfig.windows.supportedVoices];
+    } catch (error) {
+      logger.error(`Windows TTS音声一覧取得エラー: ${error}`);
+      return [...platformConfig.windows.supportedVoices];
     }
   }
 
-  async checkEngineAvailability(): Promise<{ macos: boolean; voicevox: boolean }> {
-    const result = { macos: false, voicevox: false };
-
-    // macOS TTS チェック
+  private async getMacOSVoices(): Promise<string[]> {
     try {
-      await execAsync('say -v "?" | head -1');
-      result.macos = true;
+      const { stdout } = await execAsync('say -v "?"');
+      const voices = stdout
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => line.split(/\s+/)[0])
+        .filter(voice => voice);
+      
+      return voices;
     } catch (error) {
-      logger.debug(`macOS TTS利用不可: ${error}`);
+      logger.error(`macOS TTS音声一覧取得エラー: ${error}`);
+      return [...platformConfig.macOS.supportedVoices];
+    }
+  }
+
+  async checkEngineAvailability(): Promise<{ system: boolean; voicevox: boolean }> {
+    const result = { system: false, voicevox: false };
+
+    // システム TTS チェック
+    try {
+      if (platform.isWindows()) {
+        // Windows SAPI の確認
+        const psScript = 'Add-Type -AssemblyName System.Speech; Write-Output "OK"';
+        await execAsync(`powershell -Command "${psScript}"`);
+        result.system = true;
+      } else if (platform.isMacOS()) {
+        // macOS say コマンドの確認
+        await execAsync('say -v "?" | head -1');
+        result.system = true;
+      }
+    } catch (error) {
+      logger.debug(`システムTTS利用不可: ${error}`);
     }
 
     // VOICEVOX チェック
@@ -167,7 +254,17 @@ export class TTSEngine {
   }
 
   getEngineInfo(): string {
-    return this.engine === 'voicevox' ? 'VOICEVOX' : 'macOS TTS';
+    if (this.engine === 'voicevox') {
+      return 'VOICEVOX';
+    }
+    
+    if (platform.isWindows()) {
+      return 'Windows SAPI';
+    }
+    if (platform.isMacOS()) {
+      return 'macOS TTS';
+    }
+    return 'System TTS';
   }
 
   async getVoicevoxPresets(): Promise<Array<{ key: string; name: string; style: string; id: number }>> {

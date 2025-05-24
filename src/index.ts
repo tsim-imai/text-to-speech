@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { DiscordTTSClient } from './discord.js';
 import { TTSEngine, type TTSOptions, type UnifiedTTSOptions } from './tts.js';
 import { AudioPlayer } from './audio.js';
-import { logger, sleep } from './utils.js';
+import { logger, sleep, platform } from './utils.js';
 import { VOICEVOX_PRESETS } from './voicevox.js';
 
 // 環境変数読み込み
@@ -22,7 +22,7 @@ interface AppOptions {
   allowedUserIds?: string[]; // 許可されたユーザーIDの配列
   enableDualOutput?: boolean; // デュアル出力を有効にする
   speakerDevice?: string; // 追加で再生するスピーカーデバイス名
-  engine: 'macos' | 'voicevox'; // TTSエンジン選択
+  engine: 'system' | 'voicevox'; // TTSエンジン選択
   voicevoxHost: string; // VOICEVOXホスト
   voicevoxPort: number; // VOICEVOXポート
   voicevoxSpeaker: number; // VOICEVOXスピーカーID
@@ -127,6 +127,7 @@ class DiscordTTSBridge {
   async start(): Promise<void> {
     try {
       logger.info('=== Discord TTS Bridge 開始 ===');
+      logger.info(`プラットフォーム: ${platform.current()}`);
       logger.info(`使用エンジン: ${this.ttsEngine.getEngineInfo()}`);
       
       // 許可ユーザー設定をログ出力
@@ -164,23 +165,29 @@ class DiscordTTSBridge {
 
     // TTSエンジンの可用性チェック
     const engineAvailability = await this.ttsEngine.checkEngineAvailability();
-    logger.info(`TTSエンジン可用性: macOS=${engineAvailability.macos}, VOICEVOX=${engineAvailability.voicevox}`);
+    logger.info(`TTSエンジン可用性: システム=${engineAvailability.system}, VOICEVOX=${engineAvailability.voicevox}`);
 
     if (this.options.engine === 'voicevox' && !engineAvailability.voicevox) {
-      logger.warn('VOICEVOXが利用できません。macOS TTSにフォールバックします。');
+      logger.warn('VOICEVOXが利用できません。システムTTSにフォールバックします。');
     }
 
-    // BlackHole デバイス確認
-    const blackholeExists = await this.audioPlayer.checkBlackHoleInstalled();
-    if (!blackholeExists) {
-      logger.warn(`BlackHole デバイス "${this.options.blackhole}" が見つかりません`);
+    // 仮想音声デバイス確認
+    const virtualAudioExists = await this.audioPlayer.checkBlackHoleInstalled();
+    if (!virtualAudioExists) {
+      logger.warn(`仮想音声デバイス "${this.options.blackhole}" が見つかりません`);
       const devices = await this.audioPlayer.listOutputDevices();
       logger.info('利用可能な出力デバイス:', devices);
+      
+      if (platform.isWindows()) {
+        logger.info('Windows用仮想音声ドライバのインストールを推奨: VB-Audio Virtual Cable');
+      } else if (platform.isMacOS()) {
+        logger.info('macOS用仮想音声ドライバのインストールを推奨: BlackHole 2ch');
+      }
     }
 
     // TTS 音声確認
     const voices = await this.ttsEngine.getAvailableVoices();
-    if (this.options.engine === 'macos' && !voices.includes(this.options.voice)) {
+    if (this.options.engine === 'system' && !voices.includes(this.options.voice)) {
       logger.warn(`音声 "${this.options.voice}" が見つかりません`);
       logger.info('利用可能な音声:', voices.slice(0, 10));
     }
@@ -285,8 +292,8 @@ function startMainApplication(): void {
   }
 
   // エンジン選択チェック
-  if (options.engine !== 'macos' && options.engine !== 'voicevox') {
-    logger.error('--engine は "macos" または "voicevox" を指定してください。');
+  if (options.engine !== 'system' && options.engine !== 'voicevox') {
+    logger.error('--engine は "system" または "voicevox" を指定してください。');
     process.exit(1);
   }
 
@@ -314,7 +321,7 @@ function startMainApplication(): void {
     useAfplay: options.afplay,
     enableDualOutput: options.enableDualOutput,
     speakerDevice: options.speakerDevice,
-    engine: options.engine as 'macos' | 'voicevox',
+    engine: options.engine as 'system' | 'voicevox',
     voicevoxHost: options.voicevoxHost,
     voicevoxPort: Number.parseInt(options.voicevoxPort, 10),
     voicevoxSpeaker: Number.parseInt(options.voicevoxSpeaker, 10),

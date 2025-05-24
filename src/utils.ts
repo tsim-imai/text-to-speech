@@ -59,6 +59,65 @@ export function sleep(ms: number): Promise<void> {
 // ファイル名を安全にする
 export function sanitizeFilename(text: string): string {
   return text
-    .replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, '_')
+    .replace(/[^\w\s-]/g, '_')
+    .replace(/\s+/g, '_')
     .substring(0, 50);
-} 
+}
+
+// プラットフォーム検出
+export const platform = {
+  isMacOS: () => process.platform === 'darwin',
+  isWindows: () => process.platform === 'win32',
+  isLinux: () => process.platform === 'linux',
+  current: () => process.platform,
+};
+
+// クロスプラットフォーム対応のパス区切り文字
+export const pathSeparator = process.platform === 'win32' ? '\\' : '/';
+
+// Windows用のコマンド実行ヘルパー
+export function getShellCommand(command: string): { shell: string; args: string[] } {
+  if (platform.isWindows()) {
+    return {
+      shell: 'powershell.exe',
+      args: ['-Command', command],
+    };
+  }
+  return {
+    shell: '/bin/bash',
+    args: ['-c', command],
+  };
+}
+
+// Windows用の音声ファイル形式
+export function getAudioFormat(): string {
+  if (platform.isWindows()) {
+    return 'wav'; // Windows Media Formatに対応
+  }
+  return 'aiff'; // macOSはAIFF
+}
+
+// プラットフォーム固有の設定
+export const platformConfig = {
+  macOS: {
+    ttsCommand: 'say',
+    audioSwitcher: 'SwitchAudioSource',
+    defaultVirtualAudio: 'BlackHole 2ch',
+    audioPlayer: 'afplay',
+    supportedVoices: ['Kyoko', 'Otoya', 'O-ren'],
+  },
+  windows: {
+    ttsCommand: 'powershell',
+    audioSwitcher: 'nircmd', // NirCmd for audio switching
+    defaultVirtualAudio: 'CABLE Input (VB-Audio Virtual Cable)',
+    audioPlayer: 'powershell', // PowerShell media player
+    supportedVoices: ['Haruka', 'Ayumi', 'Ichiro'], // Windows Japanese voices
+  },
+  linux: {
+    ttsCommand: 'espeak',
+    audioSwitcher: 'pactl',
+    defaultVirtualAudio: 'pulse',
+    audioPlayer: 'aplay',
+    supportedVoices: ['default'],
+  },
+} as const; 

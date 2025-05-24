@@ -1,32 +1,68 @@
 # Discord TTS Bridge
 
-Discord テキストチャンネルのメッセージを **macOS TTS** または **VOICEVOX** で読み上げて、BlackHole 経由で Discord ボイスチャンネルに配信するアプリケーションです。
+Discord テキストチャンネルのメッセージを **システムTTS** または **VOICEVOX** で読み上げて、仮想オーディオドライバ経由で Discord ボイスチャンネルに配信する**クロスプラットフォーム**アプリケーションです。
 
-## 特徴
+## 🌟 特徴
 
 - 📡 **リアルタイム読み上げ**: Discord のテキストメッセージを即座に TTS で音声化
-- 🎌 **日本語対応**: macOS の高品質な日本語音声（Kyoko, Otoya など）を使用
-- 🔊 **BlackHole 連携**: 仮想オーディオドライバ経由で Discord に音声配信
+- 🖥️ **クロスプラットフォーム対応**: Windows / macOS 両対応
+- 🎌 **多言語音声対応**: 各プラットフォームの高品質音声を使用
+- 🔊 **仮想オーディオ連携**: 仮想オーディオドライバ経由で Discord に音声配信
 - ⚙️ **高度な設定**: 音声、話速、音量など細かい調整が可能
 - 🤖 **Bot 統合**: Discord.js v14 を使用した安定した Bot 接続
 - 👥 **ユーザーフィルター**: 特定のユーザーのメッセージのみを読み上げ可能
 - 🎭 **VOICEVOX対応**: ずんだもん、四国めたんなど高品質キャラクター音声
+
+## 🖥️ 対応プラットフォーム
+
+### Windows 10/11
+- **システムTTS**: Windows SAPI（日本語音声: Haruka, Ayumi, Ichiro等）
+- **仮想オーディオ**: VB-Audio Virtual Cable
+- **音声切り替え**: PowerShell / NirCmd
+
+### macOS Sonoma (14.0)+
+- **システムTTS**: macOS TTS（日本語音声: Kyoko, Otoya, O-ren等）
+- **仮想オーディオ**: BlackHole 2ch
+- **音声切り替え**: SwitchAudioSource
+
+### 共通
+- **VOICEVOX**: 全プラットフォーム対応の高品質日本語音声合成
 
 ## 前提条件
 
 ### 必須ソフトウェア
 
 - **Node.js 20 LTS** またはそれ以降
-- **macOS Sonoma (14.0)** またはそれ以降
+
+### プラットフォーム別要件
+
+#### Windows
+- **VB-Audio Virtual Cable** (仮想オーディオドライバ)
+- **NirCmd** (オプション、音声デバイス切り替え用)
+
+#### macOS
 - **BlackHole 2ch** (仮想オーディオドライバ)
 - **SwitchAudioSource** (音声出力切り替えツール)
 
-### オプション（VOICEVOX使用時）
+### オプション（全プラットフォーム）
 
 - **VOICEVOX** (高品質日本語音声合成エンジン)
 
 ### インストール
 
+#### Windows
+```powershell
+# VB-Audio Virtual Cable をダウンロード・インストール
+# https://vb-audio.com/Cable/
+
+# NirCmd (オプション)
+# https://www.nirsoft.net/utils/nircmd.html
+
+# VOICEVOX（オプション）
+# https://voicevox.hiroshiba.jp/ からダウンロード
+```
+
+#### macOS
 ```bash
 # BlackHole と SwitchAudioSource をインストール
 brew install blackhole-2ch switchaudio-osx
@@ -115,16 +151,29 @@ npx tsx src/index.ts \
 
 > **Note**: CLI引数は環境変数より優先されます。
 
-### 基本的な実行（macOS TTS）
+### 基本的な実行（システムTTS）
 
-#### .envを使用（推奨）
+#### Windows
 ```env
 # .env
 BOT_TOKEN=your_discord_bot_token_here
 CHANNEL_ID=your_text_channel_id_here
-TTS_ENGINE=macos
+TTS_ENGINE=system
+TTS_VOICE=Haruka
+BLACKHOLE_DEVICE=CABLE Input (VB-Audio Virtual Cable)
+```
+
+```bash
+npm run dev
+```
+
+#### macOS
+```env
+# .env
+BOT_TOKEN=your_discord_bot_token_here
+CHANNEL_ID=your_text_channel_id_here
+TTS_ENGINE=system
 TTS_VOICE=Kyoko
-TTS_RATE=230
 BLACKHOLE_DEVICE=BlackHole 2ch
 ```
 
@@ -132,13 +181,22 @@ BLACKHOLE_DEVICE=BlackHole 2ch
 npm run dev
 ```
 
-#### CLI引数を使用
+#### CLI引数を使用（共通）
 ```bash
+# Windows
 npx tsx src/index.ts \
   --token "YOUR_BOT_TOKEN" \
   --channel "TEXT_CHANNEL_ID" \
+  --engine system \
+  --voice "Haruka" \
+  --blackhole "CABLE Input (VB-Audio Virtual Cable)"
+
+# macOS
+npx tsx src/index.ts \
+  --token "YOUR_BOT_TOKEN" \
+  --channel "TEXT_CHANNEL_ID" \
+  --engine system \
   --voice "Kyoko" \
-  --rate 230 \
   --blackhole "BlackHole 2ch"
 ```
 
