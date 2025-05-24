@@ -231,9 +231,9 @@ npm run dev
 ```bash
 # 特定のユーザーID（単一）
 npx tsx src/index.ts \
-  --token "MTM3NTg2MTQyNzg4MDk4NDcyOA.GlHXhq.oYA105ntAG5MsUB2A2C_a3M_cDTWWJBedUVpSI" \
-  --channel "1375687009397506178" \
-  --allowed-users "290338075920564224"
+  --token "YOUR_BOT_TOKEN" \
+  --channel "TEXT_CHANNEL_ID" \
+  --allowed-users "123456789012345678,987654321098765432,555666777888999000"
 
 # 複数のユーザーID（カンマ区切り）
 npx tsx src/index.ts \
