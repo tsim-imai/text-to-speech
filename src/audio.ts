@@ -115,13 +115,20 @@ $stream.Dispose()
 
   // macOS完全ネイティブ再生
   private async playOnMacOSNative(ttsResult: TTSResult): Promise<void> {
-    if (ttsResult.format === 'raw') {
-      // PCMデータはafplay stdin経由（完全メモリベース）
-      return this.playRawPCMWithAfplay(ttsResult);
-    }
+    try {
+      if (ttsResult.format === 'raw') {
+        // PCMデータはafplay stdin経由（完全メモリベース）
+        return await this.playRawPCMWithAfplay(ttsResult);
+      }
 
-    // WAV, AIFF等のファイルフォーマットもafplay stdin経由
-    return this.playAudioFormatWithAfplay(ttsResult);
+      // WAV, AIFF等のファイルフォーマットもafplay stdin経由
+      return await this.playAudioFormatWithAfplay(ttsResult);
+    } catch (error) {
+      logger.warn(`afplay再生エラー、代替方法を試行: ${error}`);
+      
+      // フォールバック: 一時ファイル経由での再生
+      return this.playWithTemporaryFile(ttsResult);
+    }
   }
 
   // Windowsでの複数デバイス再生（完全ネイティブ）
@@ -207,24 +214,51 @@ $stream2.Dispose()
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
-      // 音声データを標準入力に送信
-      afplayProcess.stdin.write(ttsResult.audioBuffer);
-      afplayProcess.stdin.end();
-
       return new Promise((resolve, reject) => {
-        afplayProcess.on('close', (code) => {
-          if (code === 0) {
-            logger.info('macOS 音声フォーマット再生完了（完全メモリ）');
-            resolve();
-          } else {
-            reject(new Error(`afplay process exited with code ${code}`));
+        let resolved = false;
+        
+        // エラーハンドリングを先に設定
+        afplayProcess.on('error', (error) => {
+          if (!resolved) {
+            resolved = true;
+            logger.error(`afplay process error: ${error}`);
+            reject(error);
           }
         });
 
-        afplayProcess.on('error', (error) => {
-          logger.error(`afplay process error: ${error}`);
-          reject(error);
+        afplayProcess.on('close', (code) => {
+          if (!resolved) {
+            resolved = true;
+            if (code === 0) {
+              logger.info('macOS 音声フォーマット再生完了（完全メモリ）');
+              resolve();
+            } else {
+              reject(new Error(`afplay process exited with code ${code}`));
+            }
+          }
         });
+
+        // stdin エラーハンドリング
+        afplayProcess.stdin.on('error', (error) => {
+          if (!resolved && (error as NodeJS.ErrnoException).code !== 'EPIPE') {
+            resolved = true;
+            logger.error(`afplay stdin error: ${error}`);
+            reject(error);
+          }
+          // EPIPE エラーは無視（プロセス終了による正常な状態）
+        });
+
+        // 音声データを標準入力に送信
+        try {
+          afplayProcess.stdin.write(ttsResult.audioBuffer);
+          afplayProcess.stdin.end();
+        } catch (writeError) {
+          if (!resolved) {
+            resolved = true;
+            logger.error(`afplay write error: ${writeError}`);
+            reject(writeError);
+          }
+        }
       });
 
     } catch (error) {
@@ -254,29 +288,87 @@ $stream2.Dispose()
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
-      // 音声データを標準入力に送信
-      afplayProcess.stdin.write(ttsResult.audioBuffer);
-      afplayProcess.stdin.end();
-
       return new Promise((resolve, reject) => {
-        afplayProcess.on('close', (code) => {
-          if (code === 0) {
-            logger.info('PCM音声再生完了（完全メモリ）');
-            resolve();
-          } else {
-            reject(new Error(`afplay process exited with code ${code}`));
+        let resolved = false;
+        
+        // エラーハンドリングを先に設定
+        afplayProcess.on('error', (error) => {
+          if (!resolved) {
+            resolved = true;
+            logger.error(`afplay process error: ${error}`);
+            reject(error);
           }
         });
 
-        afplayProcess.on('error', (error) => {
-          logger.error(`afplay process error: ${error}`);
-          reject(error);
+        afplayProcess.on('close', (code) => {
+          if (!resolved) {
+            resolved = true;
+            if (code === 0) {
+              logger.info('PCM音声再生完了（完全メモリ）');
+              resolve();
+            } else {
+              reject(new Error(`afplay process exited with code ${code}`));
+            }
+          }
         });
+
+        // stdin エラーハンドリング
+        afplayProcess.stdin.on('error', (error) => {
+          if (!resolved && (error as NodeJS.ErrnoException).code !== 'EPIPE') {
+            resolved = true;
+            logger.error(`afplay stdin error: ${error}`);
+            reject(error);
+          }
+          // EPIPE エラーは無視（プロセス終了による正常な状態）
+        });
+
+        // 音声データを標準入力に送信
+        try {
+          afplayProcess.stdin.write(ttsResult.audioBuffer);
+          afplayProcess.stdin.end();
+        } catch (writeError) {
+          if (!resolved) {
+            resolved = true;
+            logger.error(`afplay write error: ${writeError}`);
+            reject(writeError);
+          }
+        }
       });
 
     } catch (error) {
       logger.error(`PCM音声再生エラー: ${error}`);
       throw error;
+    }
+  }
+
+  // フォールバック: 一時ファイル経由での再生
+  private async playWithTemporaryFile(ttsResult: TTSResult): Promise<void> {
+    const { writeFileSync, unlinkSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    
+    const tempFile = join(tmpdir(), `tts_${Date.now()}.${ttsResult.format || 'wav'}`);
+    
+    try {
+      logger.info(`一時ファイル経由で再生: ${tempFile}`);
+      
+      // 一時ファイルに書き込み
+      writeFileSync(tempFile, ttsResult.audioBuffer);
+      
+      // afplayで再生
+      await execAsync(`afplay "${tempFile}"`);
+      
+      logger.info('一時ファイル再生完了');
+    } catch (error) {
+      logger.error(`一時ファイル再生エラー: ${error}`);
+      throw error;
+    } finally {
+      // 一時ファイルを削除
+      try {
+        unlinkSync(tempFile);
+      } catch (cleanupError) {
+        logger.warn(`一時ファイル削除エラー: ${cleanupError}`);
+      }
     }
   }
 
